@@ -43,13 +43,14 @@ export const processBid = functions.firestore
       let dropItemUpdate = {}
       if (dropItem.currPrice < bid.amount) {
          dropItemUpdate = { 
+            bidders: admin.firestore.FieldValue.arrayUnion(bid.userId),
             currPrice: bid.amount, 
             currBidderId: bid.userId, 
             lastUserActivityDate: bidProcessedDate, 
             dropDoneDate: dropDoneDate,
             status: DROPITEM_DROPPING }
       }
-      else { dropItemUpdate = {} }
+      else { dropItemUpdate = { bidders: admin.firestore.FieldValue.arrayUnion(bid.userId) } }
 
       return dropItemRef.update(dropItemUpdate).then(() => { 
          // set timer
