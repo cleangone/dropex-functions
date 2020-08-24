@@ -7,32 +7,22 @@ const DROPITEM_HOLD = 'On Hold'
 
 "use strict"
 admin.initializeApp()
-const db = admin.firestore();
+const db = admin.firestore()
 const log = functions.logger
 
 export const processBid = functions.firestore
    .document('bids/{bidId}')
    .onCreate((snapshot, context) => {
    const bid = snapshot.data()
-   if (!bid) {
-      log.error("Bid does not exist") 
-      return null
-   }
+   if (!bid) { logError("Bid does not exist") }
 
    const dropItemDesc = "dropItems[id: " + bid.dropItemId + "]"
    log.info("Processing Bid on " + dropItemDesc)
    const dropItemRef = db.collection("dropItems").doc(bid.dropItemId);
    return dropItemRef.get().then(doc => {
-      if (!doc.exists) {
-         console.error("Doc does not exist for get " + dropItemDesc) 
-         return null
-      }
-
+      if (!doc.exists) { return logError("Doc does not exist for get of " + dropItemDesc) }
       const dropItem = doc.data()
-      if (!dropItem) {
-         console.error("Doc.data does not exist for get " + dropItemDesc)
-         return null
-      }
+      if (!dropItem) { return logError("Doc.data does not exist for get of " + dropItemDesc) }
 
       log.info("Processing " + dropItemDesc)
       const bidProcessedDate = Date.now()
@@ -64,71 +54,27 @@ export const processBid = functions.firestore
             console.log("Updating bid on " + dropItemDesc)
             return snapshot.ref.update({ status: BID_PROCESSED, processedDate: bidProcessedDate })
          })
-         .catch(error => { 
-            console.error("Error setting " + timerDesc, error) 
-            return null
-         })
+         .catch(error => { return logError("Error setting " + timerDesc, error) })
       })
-      .catch(error => { 
-         log.error("Error updating " + dropItemDesc, error) 
-         return null
-      })
+      .catch(error => { return logError("Error updating " + dropItemDesc, error) })
    })
-   .catch(error => { 
-      log.error("Error getting " + dropItemDesc, error) 
-      return null
-   })  
+   .catch(error => { return logError("Error getting " + dropItemDesc, error) })  
 })
 
 export const processTimer = functions.firestore
    .document('timers/{timerId}')
    .onWrite(async (change, context) => {
       const timerDesc = "timers[id: " + context.params.timerId + "]"
-      if (!change.after.exists) {
-         log.info(timerDesc + " deleted")
-         return null
-      }
+      if (!change.after.exists) { return logInfo(timerDesc + " deleted") } 
 
       const timer = change.after.data();
-      if (!timer) {
-         log.error(timerDesc + " data does not exist")
-         return null
-      }
+      if (!timer) { return logError(timerDesc + " data does not exist") }
 
       const nowTime = (new Date()).getTime();
       const dropDoneDate = timer.dropDoneDate;
-
       if (dropDoneDate < nowTime) { 
          log.info(timerDesc + " expired") 
-
-         // update dropitem - it has the same id as the timer
-         const dropItemId = context.params.timerId
-         const dropItemDesc = "dropItems[id: " + dropItemId + "]"
-         const dropItemRef = db.collection("dropItems").doc(dropItemId);
-         log.info("Updating " + dropItemDesc + " to HOLD")
-         return dropItemRef.update( { status: DROPITEM_HOLD }).then(() => {            
-            log.info("Creating email")
-            const htmlMsg =  
-               "You are the high bidder on item <b>" + dropItemId + "</b>" + 
-               "<p>Insert Mission Impossible theme song here</p>"
-            const email =  { 
-               to: ["andy_robbins@yahoo.com"],
-               message: { subject: "Winning bid", html: htmlMsg }
-            }
-                 
-            return db.collection("emails").add(email).then(() => {   
-               console.log("Deleting " + timerDesc) 
-               return change.after.ref.delete() 
-            })
-            .catch(error => { 
-               console.error("Error updating " + dropItemDesc, error) 
-               return null
-            })
-         })
-         .catch(error => { 
-            console.error("Error updating " + dropItemDesc, error) 
-            return null
-         })
+         return updateDropItem(change, context)
       }
       else {
          let remainingSeconds = Math.floor((dropDoneDate - nowTime)/1000)
@@ -143,47 +89,71 @@ async function sleep(ms: number) {
    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// export const sendEmail = functions.firestore
-//    .document('other/{otherId}')
-//    .onCreate((snapshot, context) => {
-//       const email = snapshot.data()
-//       if (!email) {
-//          log.error("Email does not exist") 
-//          return null
-//       }
+async function updateDropItem(change: any, context: any) {
+   // timer.id is copied from dropitem.id
+   const dropItemId = context.params.timerId
+   const dropItemDesc = "dropItems[id: " + dropItemId + "]"
+   const dropItemRef = db.collection("dropItems").doc(dropItemId);
 
-//       const mailOptions = {
-//          from: EMAIL_ADDRESS, 
-//          to: "andy.robbins@gmail.com",
-//          subject: "Emailer function test", 
-//          html: 
-//             `<p>This is a test of the email</p>
-//             <br/>
-//             <b>Hope it works </b>
-//            ` 
-//       }
+   log.info("Getting " + dropItemDesc)
+   return dropItemRef.get().then(doc => {
+      if (!doc.exists) { return logError("Doc does not exist for get of " + dropItemDesc) }
+      const dropItem = doc.data()
+      if (!dropItem) { return logError("Doc.data does not exist for get of " + dropItemDesc) }
+ 
+      const userId = dropItem.currBidderId
+      const userDesc = "users[id: " + userId + "]"
+      log.info("Getting " + userDesc)
+      const userRef = db.collection("users").doc(userId);
+      return userRef.get().then(userDoc => {
+         if (!userDoc.exists) { return logError("Doc does not exist for get of " + userDesc) }
+         const user = userDoc.data()
+         if (!user) { return logError("Doc.data does not exist for get of " + userDesc) }
+    
+         const userFullName = user.firstName + 
+            (user.firstName.length > 0 && user.lastName.length > 0 ? " " : "")  + 
+            user.lastName
+         log.info("Updating " + dropItemDesc)
+         const dropItemUpdate = { status: DROPITEM_HOLD, buyerId: dropItem.currBidderId, buyerName: userFullName }               
+         return dropItemRef.update(dropItemUpdate).then(() => {        
+            const authUserDesc = "authUser[id: " + userId + "]"
+            log.info("Getting " + authUserDesc)
+            return admin.auth().getUser(userId).then(userRecord => {
+               log.info("Creating email")
+               const htmlMsg =  
+                  "You are the high bidder on item <a href=http://dropex.4th.host>" + dropItem.name + "</a>" + 
+                  "<p>You will be contacted with the location of the alley in which to deliver the briefcase full of cash</p>"
+               const email =  { 
+                  to: [userRecord.email],
+                  from: "Dropmaster <dropmaster@4th.host>",
+                  message: { subject: "Winning bid", html: htmlMsg }
+               }
+                  
+               return db.collection("emails").add(email).then(() => {   
+                  const timerDesc = "timers[id: " + context.params.timerId + "]"
+                  console.log("Deleting " + timerDesc) 
+                  return change.after.ref.delete() 
+               })
+               .catch(error => { return logError("Error adding Email", error) })
+            })
+            .catch(error => { return logError("Error getting " + authUserDesc, error) })
+         })
+         .catch(error => { return logError("Error updating " + dropItemDesc, error) })
+      })
+      .catch(error => { return logError("Error getting " + userDesc, error) })
+   })
+   .catch(error => { return logError("Error getting " + dropItemDesc, error) })
+}
 
-//       transporter.sendMail(mailOptions, (error, info) => {
-//          if (error) {
-//             log.error("transporter.sendMail", EMAIL_ADDRESS, error)
-//             return snapshot.ref.update({ status: EMAIL_ERROR, statusDetail: error.toString(), processedDate: Date.now() })
-//          } else {
-//             log.info("transporter.sendMail", EMAIL_ADDRESS, info)
-//             return snapshot.ref.update({ status: EMAIL_PROCESSED, statusDetail:info.response, processedDate: Date.now() })
-//          }
-//       })
-     
-//       log.info("returning default null")
-//       return null
-// })
+// convenience methods to log and return
+function logInfo(msg: string) {
+   log.info(msg)
+   return null
+}
 
-// const transporter = nodemailer.createTransport({
-//    host: 'smtp.mail.yahoo.com',
-//    port: 465,
-//    service:'yahoo',
-//    secure: false,
-//    auth: {
-//        user: EMAIL_ADDRESS,
-//        pass: EMAIL_PASSWORD
-//    }
-// })
+function logError(msg: string, error: any = null) {
+   if (error) { log.error(msg, error)}
+   else { log.error(msg) }
+
+   return null
+}
