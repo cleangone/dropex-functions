@@ -1,9 +1,10 @@
 import * as functions from 'firebase-functions'
 import * as admin from 'firebase-admin'
 
+const DROPEX_HREF = "href=http://dropex.4th.host/"  
 const BID_PROCESSED = 'Processed'
-const DROPITEM_DROPPING = 'Dropping'
-const DROPITEM_HOLD = 'On Hold'
+const ITEM_DROPPING = 'Dropping'
+const ITEM_HOLD = 'On Hold'
 
 "use strict"
 admin.initializeApp()
@@ -16,49 +17,49 @@ export const processBid = functions.firestore
    const bid = snapshot.data()
    if (!bid) { logError("Bid does not exist") }
 
-   const dropItemDesc = "dropItems[id: " + bid.dropItemId + "]"
-   log.info("Processing Bid on " + dropItemDesc)
-   const dropItemRef = db.collection("dropItems").doc(bid.dropItemId);
-   return dropItemRef.get().then(doc => {
-      if (!doc.exists) { return logError("Doc does not exist for get of " + dropItemDesc) }
-      const dropItem = doc.data()
-      if (!dropItem) { return logError("Doc.data does not exist for get of " + dropItemDesc) }
+   const itemDesc = "items[id: " + bid.itemId + "]"
+   log.info("Processing Bid on " + itemDesc)
+   const itemRef = db.collection("items").doc(bid.itemId);
+   return itemRef.get().then(doc => {
+      if (!doc.exists) { return logError("Doc does not exist for get of " + itemDesc) }
+      const item = doc.data()
+      if (!item) { return logError("Doc.data does not exist for get of " + itemDesc) }
 
-      log.info("Processing " + dropItemDesc)
+      log.info("Processing " + itemDesc)
       const bidProcessedDate = Date.now()
       // todo - read drop each time?  tramp data on bid?
       const extensionSeconds = 30
       const dropDoneDate = bidProcessedDate + extensionSeconds * 1000
 
-      let dropItemUpdate = { }
-      if (dropItem.currPrice < bid.amount) {
-         dropItemUpdate = { 
-            bidders: admin.firestore.FieldValue.arrayUnion(bid.userId),
-            currPrice: bid.amount, 
+      let itemUpdate = { }
+      if (item.buyPrice < bid.amount) {
+         itemUpdate = { 
+            buyPrice: bid.amount, 
+            bidderIds: admin.firestore.FieldValue.arrayUnion(bid.userId),
             currBidderId: bid.userId, 
             lastUserActivityDate: bidProcessedDate, 
             dropDoneDate: dropDoneDate,
-            status: DROPITEM_DROPPING,
+            status: ITEM_DROPPING,
          }
       }
       else {
-         dropItemUpdate = { bidders: admin.firestore.FieldValue.arrayUnion(bid.userId) }
+         itemUpdate = { bidderIds: admin.firestore.FieldValue.arrayUnion(bid.userId) }
       }
 
-      return dropItemRef.update(dropItemUpdate).then(() => { 
+      return itemRef.update(itemUpdate).then(() => { 
          // set timer
-         const timerDesc = "timers[id: " + bid.dropItemId + "]"
-         const timerRef = db.collection("timers").doc(bid.dropItemId)
+         const timerDesc = "timers[id: " + bid.itemId + "]"
+         const timerRef = db.collection("timers").doc(bid.itemId)
          log.info("Setting " + timerDesc)
          return timerRef.set({ dropDoneDate: dropDoneDate }).then(() => { 
-            console.log("Updating bid on " + dropItemDesc)
+            console.log("Updating bid on " + itemDesc)
             return snapshot.ref.update({ status: BID_PROCESSED, processedDate: bidProcessedDate })
          })
          .catch(error => { return logError("Error setting " + timerDesc, error) })
       })
-      .catch(error => { return logError("Error updating " + dropItemDesc, error) })
+      .catch(error => { return logError("Error updating " + itemDesc, error) })
    })
-   .catch(error => { return logError("Error getting " + dropItemDesc, error) })  
+   .catch(error => { return logError("Error getting " + itemDesc, error) })  
 })
 
 export const processTimer = functions.firestore
@@ -74,7 +75,7 @@ export const processTimer = functions.firestore
       const dropDoneDate = timer.dropDoneDate;
       if (dropDoneDate < nowTime) { 
          log.info(timerDesc + " expired") 
-         return updateDropItem(change, context)
+         return updateItem(change, context)
       }
       else {
          let remainingSeconds = Math.floor((dropDoneDate - nowTime)/1000)
@@ -89,19 +90,19 @@ async function sleep(ms: number) {
    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function updateDropItem(change: any, context: any) {
-   // timer.id is copied from dropitem.id
-   const dropItemId = context.params.timerId
-   const dropItemDesc = "dropItems[id: " + dropItemId + "]"
-   const dropItemRef = db.collection("dropItems").doc(dropItemId);
+async function updateItem(change: any, context: any) {
+   // timer.id is copied from item.id
+   const itemId = context.params.timerId
+   const itemDesc = "items[id: " + itemId + "]"
+   const itemRef = db.collection("items").doc(itemId);
 
-   log.info("Getting " + dropItemDesc)
-   return dropItemRef.get().then(doc => {
-      if (!doc.exists) { return logError("Doc does not exist for get of " + dropItemDesc) }
-      const dropItem = doc.data()
-      if (!dropItem) { return logError("Doc.data does not exist for get of " + dropItemDesc) }
+   log.info("Getting " + itemDesc)
+   return itemRef.get().then(doc => {
+      if (!doc.exists) { return logError("Doc does not exist for get of " + itemDesc) }
+      const item = doc.data()
+      if (!item) { return logError("Doc.data does not exist for get of " + itemDesc) }
  
-      const userId = dropItem.currBidderId
+      const userId = item.currBidderId
       const userDesc = "users[id: " + userId + "]"
       log.info("Getting " + userDesc)
       const userRef = db.collection("users").doc(userId);
@@ -110,31 +111,34 @@ async function updateDropItem(change: any, context: any) {
          const user = userDoc.data()
          if (!user) { return logError("Doc.data does not exist for get of " + userDesc) }
     
-         const userFullName = user.firstName + 
+         const userName = user.firstName + 
             (user.firstName.length > 0 && user.lastName.length > 0 ? " " : "")  + 
             user.lastName
-         log.info("Updating " + dropItemDesc)
-         const dropItemUpdate = { status: DROPITEM_HOLD, buyerId: dropItem.currBidderId, buyerName: userFullName }               
-         return dropItemRef.update(dropItemUpdate).then(() => {        
+         log.info("Updating " + itemDesc)
+         const itemUpdate = { status: ITEM_HOLD, buyerId: item.currBidderId, buyerName: userName }               
+         return itemRef.update(itemUpdate).then(() => {        
             const timerDesc = "timers[id: " + context.params.timerId + "]"
             console.log("Deleting " + timerDesc) 
             return change.after.ref.delete().then(() => {   
                const htmlMsg =  
-                  "You are the high bidder on item <a href=http://dropex.4th.host>" + dropItem.name + "</a>" + 
-                  "<p>You will be contacted with the location of the alley in which to deliver the briefcase full of cash</p>"
+                  "You are the high bidder on item " + itemLink(item.id, item.name)
+                 "<p>You will be contacted with the location of the alley in which to deliver the briefcase full of cash</p>"
                const subject = "Winning bid"
                
                return sendEmail(userId, subject, htmlMsg)
                .catch(error => { return logError("Error sending Email", error) }) 
             })
          })
-         .catch(error => { return logError("Error updating " + dropItemDesc, error) })
+         .catch(error => { return logError("Error updating " + itemDesc, error) })
       })
       .catch(error => { return logError("Error getting " + userDesc, error) })
    })
-   .catch(error => { return logError("Error getting " + dropItemDesc, error) })
+   .catch(error => { return logError("Error getting " + itemDesc, error) })
 }
 
+// todo - handle create/update
+// if new status is Created or Sent, send email and set status to Sent
+// if new status is Paid, then mark items as Sold            
 export const processInvoice = functions.firestore
    .document('invoices/{invoiceId}')
    .onCreate((snapshot, context) => {
@@ -143,19 +147,24 @@ export const processInvoice = functions.firestore
 
    const invoiceDesc = "invoices[id: " + invoice.id + "]"
    let itemText = ''
+   let itemId = null
    for (var item of invoice.items) {
-      if (itemText.length > 0) { itemText += ", " }
+      if (itemText.length == 0) { itemId = item.id }
+      else {
+         itemText += ", " 
+         itemId = null
+      }
       itemText += item.name
    }
 
-   const htmlMsg = "Here is you invoice for <a href=http://dropex.4th.host>" + itemText + "</a>" 
+   const link = itemId ? itemLink(itemId, itemText) : "<a " + DROPEX_HREF + ">" + itemText + "</a>"  
+   const htmlMsg = "Here is you invoice for " + link
    return sendEmail(invoice.userId, "Invoice", htmlMsg).then(() => {
       console.log("Updating invoice " + invoiceDesc)
       return snapshot.ref.update({ status: "Sent", sentDate: Date.now() })
    })
    .catch(error => { return logError("Error sending Email", error) }) 
 })
-
 
 async function sendEmail(userId: string, subject: string, htmlMsg: string) {
    const authUserDesc = "authUser[id: " + userId + "]"
@@ -165,7 +174,7 @@ async function sendEmail(userId: string, subject: string, htmlMsg: string) {
       log.info("Creating email")
       const email =  { 
          to: [userRecord.email],
-         from: "Dropmaster <dropmaster@4th.host>",
+         from: "Dropzone <dropzone@4th.host>",
          message: { subject: subject, html: htmlMsg }
       }
       return db.collection("emails").add(email)
@@ -174,22 +183,9 @@ async function sendEmail(userId: string, subject: string, htmlMsg: string) {
    .catch(error => { throw logReturnError("Error getting " + authUserDesc, error) })
 }
 
-// async function sendEmailOld(userId: string, subject: string, htmlMsg: string) {
-//    const authUserDesc = "authUser[id: " + userId + "]"
-//    log.info("Getting " + authUserDesc)
-   
-//    return admin.auth().getUser(userId).then(userRecord => {
-//       log.info("Creating email")
-//       const email =  { 
-//          to: [userRecord.email],
-//          from: "Dropmaster <dropmaster@4th.host>",
-//          message: { subject: subject, html: htmlMsg }
-//       }
-//       return db.collection("emails").add(email)
-//       .catch(error => { return logError("Error adding Email", error) })   
-//    })
-//    .catch(error => { return logError("Error getting " + authUserDesc, error) })
-// }
+function itemLink(itemId: string, itemName: string) {
+   return ("<a " + DROPEX_HREF + "#/item/" + itemId + ">" + itemName + "</a>")   
+}
 
 // convenience methods to log and return
 function logInfo(msg: string) {
