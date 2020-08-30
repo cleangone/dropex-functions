@@ -5,6 +5,9 @@
 # Typescript v1 declaration files
 typings/
 
+# temp while working on it
+utils.ts
+
 # all files except index.ts
 package-lock.json
 package.json

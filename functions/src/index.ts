@@ -1,10 +1,12 @@
 import * as functions from 'firebase-functions'
 import * as admin from 'firebase-admin'
+// import { Utils } from './utils'
 
 const DROPEX_HREF = "href=http://dropex.4th.host/"  
 const BID_PROCESSED = 'Processed'
 const ITEM_DROPPING = 'Dropping'
 const ITEM_HOLD = 'On Hold'
+const ITEM_SOLD = 'Sold'
 
 "use strict"
 admin.initializeApp()
@@ -136,34 +138,63 @@ async function updateItem(change: any, context: any) {
    .catch(error => { return logError("Error getting " + itemDesc, error) })
 }
 
-// todo - handle create/update
-// if new status is Created or Sent, send email and set status to Sent
-// if new status is Paid, then mark items as Sold            
+const INVOICE_CREATED = 'Created'
+const INVOICE_SENT = 'Sent'
+const INVOICE_PAID = 'Paid'
+
 export const processInvoice = functions.firestore
    .document('invoices/{invoiceId}')
-   .onCreate((snapshot, context) => {
-   const invoice = snapshot.data()
-   if (!invoice) { return logError("Invoice does not exist") }
+   .onWrite((change, context) => {
+   const invoiceDesc = "invoices[id: " + context.params.invoiceId + "]"
+   if (!change.after.exists) { return logInfo(invoiceDesc + " deleted") } 
 
-   const invoiceDesc = "invoices[id: " + invoice.id + "]"
-   let itemText = ''
-   let itemId = null
-   for (var item of invoice.items) {
-      if (itemText.length == 0) { itemId = item.id }
-      else {
-         itemText += ", " 
-         itemId = null
+   const invoice = change.after.data()
+   if (!invoice) { return logError(invoiceDesc + " data does not exist") }
+
+   if (invoice.status == INVOICE_CREATED || invoice.status == INVOICE_SENT) {
+      // send email and set status to Sent
+      let itemText = ''
+      let itemId = null
+      for (const item of invoice.items) {
+         if (itemText.length === 0) { itemId = item.id }
+         else {
+            itemText += ", " 
+            itemId = null
+         }
+         itemText += item.name
       }
-      itemText += item.name
-   }
 
-   const link = itemId ? itemLink(itemId, itemText) : "<a " + DROPEX_HREF + ">" + itemText + "</a>"  
-   const htmlMsg = "Here is you invoice for " + link
-   return sendEmail(invoice.userId, "Invoice", htmlMsg).then(() => {
-      console.log("Updating invoice " + invoiceDesc)
-      return snapshot.ref.update({ status: "Sent", sentDate: Date.now() })
-   })
-   .catch(error => { return logError("Error sending Email", error) }) 
+      const subject = invoice.status === INVOICE_CREATED ? "Invoice" : "Updated Invoice"
+      const link = itemId ? itemLink(itemId, itemText) : "<a " + DROPEX_HREF + ">" + itemText + "</a>"  
+      const htmlMsg = "Here is you invoice for " + link
+      return sendEmail(invoice.userId, subject, htmlMsg).then(() => {
+         console.log("Updating invoice " + invoiceDesc)
+         // todo - do we want to record multiple dates if resent?
+         return change.after.ref.update({ status: INVOICE_SENT, sentDate: Date.now() })
+      })
+      .catch(error => { return logError("Error sending Email", error) }) 
+   } else if (invoice.status === INVOICE_PAID) {
+      const promises = []
+      for (const item of invoice.items) {
+         const itemId = item.id
+         const itemDesc = "items[id: " + itemId + "]"
+         log.info("Updating " + itemDesc)  
+         const itemRef = db.collection("items").doc(itemId);
+         const itemUpdate = { status: ITEM_SOLD }               
+         const promise = itemRef.update(itemUpdate)
+         .catch(error => { throw logReturnError("Error updating " + itemDesc, error) })
+
+         promises.push(promise)
+      }
+   
+      //return Promise.all(promises).then(arrayOfPromises => {})
+      return Promise.all(promises)
+   }
+   else { 
+      // new status is Shipped - no-op
+      // todo - should we check if old status was Paid? Not no-op if old status was Sent
+      return null
+   }
 })
 
 async function sendEmail(userId: string, subject: string, htmlMsg: string) {
